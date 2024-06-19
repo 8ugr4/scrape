@@ -1,5 +1,6 @@
 
 // UPDATE 19.06.24/21.20/: net/url is not enough to scrape <meta> tags.
+
 // use net/http and maybe html to parse the html response
 // to extract charset from <meta>
 
