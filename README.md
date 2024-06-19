@@ -11,12 +11,19 @@
 
 // ::: WORKING STRUCTURE OF THE PROGRAM :::
 // read the file, save the urls.
+
 // http scraping
+
 // use goroutines to scrape every URL
+
 // use channels(buffer with the number of total goroutines)
+
 // while reading with goroutines, use one goroutine to carry the input to the output file
+
 // use another goroutine to convert the taken input from READER goroutines into expected format
+
 // format is: "url":"<charset>"
+
 // target address URL
 
 // EXAMPLE OUTPUT AT THE MOMENT: (21.40)
