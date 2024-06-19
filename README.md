@@ -28,8 +28,11 @@
 
 // EXAMPLE OUTPUT AT THE MOMENT: (21.40)
 /*
+
 scrapedInput:= https://drstearns.github.io/tutorials/gojson/
+
 scrapedInput:= https://leangaurav.medium.com/common-mistakes-when-using-golangs-sync-waitgroup-88188556ca54
+
 scrapedInput:= https://stackoverflow.com/questions/48271388/for-loop-with-buffered-channel
 
 Process finished with the exit code 0
