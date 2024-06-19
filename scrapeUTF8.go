@@ -1,4 +1,4 @@
-package main
+npackage main
 
 import (
 	"bufio"
@@ -38,7 +38,8 @@ Process finished with the exit code 0
 
 // InputFileAddress contains the path of the given document
 // for the URL file.
-const InputFileAddress string = "C:/Users/Bugra/Desktop/listOfUrl.txt"
+// CHANGE THE InputFileAddress before using it :
+const InputFileAddress string = "Path:/Far/over/the/misty/mountains/cold.txt"
 
 // takeFile reads the file from filePath, and while reading sends the url input to the urlFlowSender channel.
 func takeFile(wg *sync.WaitGroup, filePath string, urlFlowSender chan<- string) {
