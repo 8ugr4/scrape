@@ -13,16 +13,22 @@ import (
 	"time"
 )
 
+// inputFilepath contains the path of the given document for the URL file.
+
 const (
 	inputFilepath = "C:/Users/Bugra/Desktop/listOfUrl.txt"
+	newFilepath   = "C:/Users/Bugra/Desktop/reportOfUrl.txt"
 )
 
 type Scrapper struct {
+	oldFilepath string // old filepath
+	newFilepath string // new filepath
+	workersCnt  int
 }
 
 type response struct {
-	Status string // Fields must start with capital letters to be exported.
-	Url    string // Only exported fields will be encoded/decoded in JSON.
+	Status string
+	Url    string
 	Length int64
 }
 
@@ -34,12 +40,33 @@ var (
 	workersCnt = runtime.NumCPU()
 )
 
-func New() *Scrapper {
-	return &Scrapper{}
+func New(newFilepath string, workersCnt int) *Scrapper {
+	return &Scrapper{oldFilepath: inputFilepath, newFilepath: newFilepath, workersCnt: workersCnt}
 }
 
-// inputFilepath contains the path of the given document
-// for the URL file.
+func (scrapper *Scrapper) Run() {
+
+	log.Printf("using %d workers", workersCnt)
+
+	urlFlowSender := make(chan string, workersCnt) // urls channel
+	parsedFlowSender := make(chan *response, 3)    // parsed channel
+
+	var workerWg sync.WaitGroup
+
+	// reads file from filePath and sends the inputs
+	go readFile(inputFilepath, urlFlowSender)
+
+	//into urlFlowSender channel as it reads.
+	for i := 0; i < workersCnt; i++ {
+		workerWg.Add(1)
+		go httpWorker(&workerWg, urlFlowSender, parsedFlowSender)
+	}
+
+	//reads from urlFlowSender and writes into .csv data.
+	go writeIntoFile(parsedFlowSender)
+
+	workerWg.Wait()
+}
 
 // readFile reads the file from filePath, and while reading sends the url input to the urlFlowSender channel.
 func readFile(filePath string, urlFlowSender chan<- string) {
@@ -47,7 +74,12 @@ func readFile(filePath string, urlFlowSender chan<- string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer content.Close()
+	defer func(content *os.File) {
+		err := content.Close()
+		if err != nil {
+
+		}
+	}(content)
 
 	s := bufio.NewScanner(content)
 	for s.Scan() {
@@ -73,11 +105,9 @@ func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, parsedFlowSender cha
 		log.Printf("it took %v to finish for the worker", time.Since(start))
 	}(time.Now())
 
-	// what to do if 2024/06/20 11:36:47 Get "https://chat.insomnia.rest": dial tcp 34.133.30.248:443: connectex: No connection could be made because the target machine actively refused it.
-	// make an error control if this happens.
 	for urlStr := range urlStrCh {
 		request, err := http.NewRequest(http.MethodGet, urlStr, nil) //  GETS A RESPONSE
-		if err != nil {                                              //a non 2-xx httpResp doesnt cause error. when err is nil, resp always contains a non-nil resp.Body.
+		if err != nil {
 			log.Fatal(err)
 		}
 
@@ -93,7 +123,12 @@ func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, parsedFlowSender cha
 		if err != nil {
 			log.Fatalf("error when sending request to the server: %v", err)
 		}
-		defer httpResp.Body.Close()
+		defer func(Body io.ReadCloser) {
+			err := Body.Close()
+			if err != nil {
+
+			}
+		}(httpResp.Body)
 
 		resp.Status = httpResp.Status
 		if httpResp.ContentLength == -1 {
@@ -110,14 +145,15 @@ func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, parsedFlowSender cha
 	}
 }
 
-// writeIntoFile writes the parsed URL queries to a file.
-// reads from parsedFlowReceiver(actually parsedFlowSender), puts the inputs into a .csv file.
-func writeIntoFile(parsedFlowReceiver <-chan *response) {
-	//but in here we read from it (parsedFlowSender = parsedFlowReceiver).
+// writeIntoFile writes the parsed Input(URL) to a file.
+// reads from parsedFlowReceiver puts the inputs into a .csv file.
 
-	fp, err := os.Create("scrapedFile.csv")
+func writeIntoFile(parsedFlowReceiver <-chan *response) {
+
+	//"scrapedFile.csv" changed with newFilepath
+	fp, err := os.Create(newFilepath)
 	if err != nil {
-		log.Fatalln("Failed to create the fp:", err)
+		log.Fatalln("Failed to create the ofp:", err)
 	}
 	defer func() {
 		if err := fp.Close(); err != nil {
@@ -126,7 +162,13 @@ func writeIntoFile(parsedFlowReceiver <-chan *response) {
 	}()
 
 	for resp := range parsedFlowReceiver {
-		fmt.Fprintf(fp, "%v: %v: %v\n", resp.Status, resp.Url, resp.Length) // todo check for the error
+		_, err := fmt.Fprintf(fp, "%v: %v: %v\n", resp.Status, resp.Url, resp.Length)
+		if err != nil {
+			return
+		} // todo check for the error
+		if _, err := fp.Write([]byte(resp.Url)); err != nil {
+			log.Fatalf("could not write into the file %v\n", err)
+		}
 	}
 }
 
@@ -134,43 +176,20 @@ func writeIntoFile(parsedFlowReceiver <-chan *response) {
 // var readFileWg sync.WaitGroup, use :  &readFileWg
 
 func main() {
-	//myScrapper := New("my input file", "my output file")
-	//myScrapper.Run()
+	myScrapper := New("newFilepath", 1)
+	myScrapper.Run()
 
-	log.Printf("using %d workers", workersCnt)
-
-	urlFlowSender := make(chan string, workersCnt) // urls channel
-	parsedFlowSender := make(chan *response, 3)    // parsed channel
-
-	var workerWg sync.WaitGroup
-
-	// reads file from filePath and sends the inputs
-	go readFile(inputFilepath, urlFlowSender)
-
-	//into urlFlowSender channel as it reads.
-	for i := 0; i < workersCnt; i++ { //while readFile is reading, parseUrlQuery starts to read from
-		workerWg.Add(1) //readFile with(urlFlowReceiver = urlFlowSender)
-		// and parse the URL's (atm it does not)
-		go httpWorker(&workerWg, urlFlowSender, parsedFlowSender) //and sends to parsedFlowSender channel
-	}
-
-	go writeIntoFile(parsedFlowSender) //reads from urlFlowSender and writes into .csv data.
-
-	workerWg.Wait()
-
-	close(parsedFlowSender)
 }
 
-// next goal: read <meta> tags with http and html, return using smth similar to the following struct.
-// maybe additional stuff too, it depends.
 /*
-type definedUrl struct {
-	urlname string `json:"url"`
-	charset string `json:"<charset>"`
-}
+	after writing run function go for error channel
+	smth like this:
 
-func newUrl(urlname string, charset string) *definedUrl {
-	u := definedUrl{urlname: urlname, charset: charset}
-	return &u
-}
+	val, ok := mymap[123]
+
+	err, ok := <- errCh
+	if err =
+	// if ch is closed then ok.
+	close(parsedFlowSender)
+
 */
