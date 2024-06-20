@@ -45,39 +45,53 @@ func New(newFilepath string, workersCnt int) *Scrapper {
 }
 
 func (scrapper *Scrapper) Run() {
+	defer func(start time.Time) {
+		log.Printf("it took %v to finish the Run()", time.Since(start))
+	}(time.Now())
 
 	log.Printf("using %d workers", workersCnt)
 
-	urlFlowSender := make(chan string, workersCnt) // urls channel
-	parsedFlowSender := make(chan *response, 3)    // parsed channel
+	urlStrCh := make(chan string, workersCnt) // urls channel
+	parseCh := make(chan *response, 3)        // parsed channel
+	errCh := make(chan error, 1)              //error channel
 
 	var workerWg sync.WaitGroup
 
 	// reads file from filePath and sends the inputs
-	go readFile(inputFilepath, urlFlowSender)
-
-	//into urlFlowSender channel as it reads.
+	go readFile(inputFilepath, urlStrCh, errCh)
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		select {
+		case msg1 := <-errCh:
+			if msg1 != nil {
+				log.Println(msg1)
+			}
+		}
+	}()
+	//into urlStrCh channel as it reads.
 	for i := 0; i < workersCnt; i++ {
 		workerWg.Add(1)
-		go httpWorker(&workerWg, urlFlowSender, parsedFlowSender)
+		go httpWorker(&workerWg, urlStrCh, parseCh, errCh)
 	}
 
-	//reads from urlFlowSender and writes into .csv data.
-	go writeIntoFile(parsedFlowSender)
+	//reads from urlStrCh and writes into .csv data.
+	go writeIntoFile(parseCh, errCh)
 
 	workerWg.Wait()
+	close(errCh)
 }
 
 // readFile reads the file from filePath, and while reading sends the url input to the urlFlowSender channel.
-func readFile(filePath string, urlFlowSender chan<- string) {
+func readFile(filePath string, urlStrCh chan<- string, errCh chan<- error) {
+
 	content, err := os.Open(filePath)
 	if err != nil {
-		log.Fatal(err)
+		errCh <- err
 	}
 	defer func(content *os.File) {
 		err := content.Close()
 		if err != nil {
-
+			errCh <- err
 		}
 	}(content)
 
@@ -85,21 +99,23 @@ func readFile(filePath string, urlFlowSender chan<- string) {
 	for s.Scan() {
 		urlStr := s.Text()
 		if urlStr == "" {
+			errCh <- err
 			continue
 		}
 
-		urlFlowSender <- urlStr
+		urlStrCh <- urlStr
 	}
 
 	if err := s.Err(); err != nil {
+		errCh <- err
 		log.Fatalf("could not read a line from the file: %v", err)
 	}
 
-	close(urlFlowSender)
+	close(urlStrCh)
 	//important. always close the channel if other functions also use it, but wait for it to finish.
 }
 
-func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, parsedFlowSender chan<- *response) {
+func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, ParseCh chan<- *response, errCh chan<- error) {
 	defer wg.Done()
 	defer func(start time.Time) {
 		log.Printf("it took %v to finish for the worker", time.Since(start))
@@ -108,12 +124,12 @@ func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, parsedFlowSender cha
 	for urlStr := range urlStrCh {
 		request, err := http.NewRequest(http.MethodGet, urlStr, nil) //  GETS A RESPONSE
 		if err != nil {
-			log.Fatal(err)
+			errCh <- err
 		}
 
 		request.URL, err = url.Parse(urlStr)
 		if err != nil {
-
+			errCh <- err
 		}
 		resp := response{
 			Url: urlStr,
@@ -135,36 +151,36 @@ func httpWorker(wg *sync.WaitGroup, urlStrCh <-chan string, parsedFlowSender cha
 			body, err := io.ReadAll(httpResp.Body)
 			resp.Length = int64(len(body))
 			if err != nil {
-				log.Fatalln("could not read the size of the content.", err)
+				errCh <- err
 			}
 		} else {
 			resp.Length = httpResp.ContentLength
 		}
 
-		parsedFlowSender <- &resp
+		ParseCh <- &resp
 	}
 }
 
 // writeIntoFile writes the parsed Input(URL) to a file.
 // reads from parsedFlowReceiver puts the inputs into a .csv file.
 
-func writeIntoFile(parsedFlowReceiver <-chan *response) {
+func writeIntoFile(parseCh <-chan *response, errCh chan<- error) {
 
 	//"scrapedFile.csv" changed with newFilepath
 	fp, err := os.Create(newFilepath)
 	if err != nil {
-		log.Fatalln("Failed to create the ofp:", err)
+		errCh <- err
 	}
 	defer func() {
 		if err := fp.Close(); err != nil {
-			log.Fatalln(err)
+			errCh <- err
 		}
 	}()
 
-	for resp := range parsedFlowReceiver {
+	for resp := range parseCh {
 		_, err := fmt.Fprintf(fp, "%v: %v: %v\n", resp.Status, resp.Url, resp.Length)
 		if err != nil {
-			return
+			errCh <- err
 		} // todo check for the error
 		if _, err := fp.Write([]byte(resp.Url)); err != nil {
 			log.Fatalf("could not write into the file %v\n", err)
