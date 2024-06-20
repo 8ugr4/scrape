@@ -1,4 +1,4 @@
-npackage main
+package main
 
 import (
 	"bufio"
@@ -38,8 +38,7 @@ Process finished with the exit code 0
 
 // InputFileAddress contains the path of the given document
 // for the URL file.
-// CHANGE THE InputFileAddress before using it :
-const InputFileAddress string = "Path:/Far/over/the/misty/mountains/cold.txt"
+const InputFileAddress string = "C:/Users/Bugra/Desktop/listOfUrl.txt"
 
 // takeFile reads the file from filePath, and while reading sends the url input to the urlFlowSender channel.
 func takeFile(wg *sync.WaitGroup, filePath string, urlFlowSender chan<- string) {
@@ -68,7 +67,7 @@ func takeFile(wg *sync.WaitGroup, filePath string, urlFlowSender chan<- string) 
 // parseUrlQuery: parses raw URLs (from urlFlowReceiver) into URL structures and sends
 // the parsedURL's (still just same URL's given at the start until HTTP and HTML update)
 // into parsedFlowSender channel.
-func parseUrlQuery(wg *sync.WaitGroup, urlFlowReceiver <-chan string, parsedFlowSender chan<- string, workerDone chan<- struct{}) {
+func parseUrlQuery(wg *sync.WaitGroup, urlFlowReceiver <-chan string, parsedFlowSender chan<- string) {
 	defer wg.Done()
 
 	for urlInput := range urlFlowReceiver {
@@ -79,7 +78,6 @@ func parseUrlQuery(wg *sync.WaitGroup, urlFlowReceiver <-chan string, parsedFlow
 		}
 		parsedFlowSender <- parsedURL.String()
 	}
-	workerDone <- struct{}{}
 }
 
 // writeInFile writes the parsed URL queries to a file.
@@ -115,7 +113,7 @@ func main() {
 	var workerWg sync.WaitGroup
 	var writerWg sync.WaitGroup
 
-	workerDone := make(chan struct{}, workersCnt) // helps synchronize the completion of worker goroutines
+	//workerDone := make(chan struct{}, workersCnt) // helps synchronize the completion of worker goroutines
 	// empty struct in go is a zero size type. (probably it's idiomatic way to use that so no extra memory usage.)
 	// there is also no need to send any additional data. so kind of a way to send done signal. (not boolean but still)
 	// especially with parsedFlowSender
@@ -127,7 +125,7 @@ func main() {
 	for i := 0; i < workersCnt; i++ { //while takeFile is reading, parseUrlQuery starts to read from
 		workerWg.Add(1) //takeFile with(urlFlowReceiver = urlFlowSender)
 		// and parse the URL's (atm it does not)
-		go parseUrlQuery(&workerWg, urlFlowSender, parsedFlowSender, workerDone) //and sends to parsedFlowSender channel
+		go parseUrlQuery(&workerWg, urlFlowSender, parsedFlowSender) //and sends to parsedFlowSender channel
 		// uses workerDone instead of close(parsedFlowSender), because this has to be closed after all workers
 		// have finished sending data.
 	}
@@ -137,9 +135,11 @@ func main() {
 	readFileWg.Wait()
 	workerWg.Wait()
 	// waiting for parseUrlQuery goroutines
-	for i := 0; i < workersCnt; i++ {
-		<-workerDone
-	}
+	/*
+		for i := 0; i < workersCnt; i++ {
+			<-workerDone
+		}
+	*/
 	close(parsedFlowSender)
 	writerWg.Wait()
 	// parse the url's with parseUrlQuery function
