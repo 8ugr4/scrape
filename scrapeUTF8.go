@@ -3,8 +3,9 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
-	"net/url"
+	"net/http"
 	"os"
 	"sync"
 )
@@ -67,6 +68,7 @@ func takeFile(wg *sync.WaitGroup, filePath string, urlFlowSender chan<- string) 
 // parseUrlQuery: parses raw URLs (from urlFlowReceiver) into URL structures and sends
 // the parsedURL's (still just same URL's given at the start until HTTP and HTML update)
 // into parsedFlowSender channel.
+/*
 func parseUrlQuery(wg *sync.WaitGroup, urlFlowReceiver <-chan string, parsedFlowSender chan<- string) {
 	defer wg.Done()
 
@@ -79,10 +81,52 @@ func parseUrlQuery(wg *sync.WaitGroup, urlFlowReceiver <-chan string, parsedFlow
 		parsedFlowSender <- parsedURL.String()
 	}
 }
+*/
+
+type Response struct {
+	Status string `json:"status"`        // Fields must start with capital letters to be exported.
+	Url    string `json:"url,omitempty"` // Only exported fields will be encoded/decoded in JSON.
+	Length int    `json:"length"`
+}
+
+func httpWorker(wg *sync.WaitGroup, urlFlowReceiver <-chan string, parsedFlowSender chan<- *Response) {
+	defer wg.Done()
+	client := &http.Client{}
+	// what to do if 2024/06/20 11:36:47 Get "https://chat.insomnia.rest": dial tcp 34.133.30.248:443: connectex: No connection could be made because the target machine actively refused it.
+	// make an error control if this happens.
+	for urlInput := range urlFlowReceiver {
+		request, err := http.NewRequest(http.MethodGet, urlInput, nil) //  GETS A RESPONSE
+		if err != nil {                                                //a non 2-xx response doesnt cause error. when err is nil, resp always contains a non-nil resp.Body.
+			log.Fatal(err)
+		}
+		q := request.URL.Query()
+		q.Add("<meta charset>", "UTF-8")  //adding <meta> to query Argument.
+		request.URL.RawQuery = q.Encode() // assigning encoded query string to http request.
+		response, err := client.Do(request)
+		if err != nil {
+			log.Fatalln("error when sending request to the server")
+			return
+		}
+		defer response.Body.Close()
+		responseBody, err := io.ReadAll(response.Body)
+		size := len(responseBody)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		resp := Response{} //new Responce instance
+		resp.Url = urlInput
+		resp.Status = response.Status
+		resp.Length = size
+		parsedFlowSender <- &resp
+	}
+}
 
 // writeInFile writes the parsed URL queries to a file.
 // reads from parsedFlowReceiver(actually parsedFlowSender), puts the inputs into a .csv file.
-func writeInFile(wg *sync.WaitGroup, parsedFlowReceiver <-chan string) {
+func writeInFile(wg *sync.WaitGroup, parsedFlowReceiver <-chan *Response) {
 	//but in here we read from it (parsedFlowSender = parsedFlowReceiver).
 	defer wg.Done()
 
@@ -91,14 +135,18 @@ func writeInFile(wg *sync.WaitGroup, parsedFlowReceiver <-chan string) {
 		log.Fatalln("Failed to create the file:", err)
 	}
 	defer file.Close()
-
-	for scrapedInput := range parsedFlowReceiver {
-		fmt.Println("scrapedInput:=", scrapedInput)
-		_, err := file.WriteString(scrapedInput + "\n")
-		if err != nil {
+	for resp := range parsedFlowReceiver {
+		fmt.Fprintf(file, "%v: %v: %v\n", resp.Status, resp.Url, resp.Length)
+	}
+	/*
+		for resp := range parsedFlowReceiver {
+			file.WriteString(resp.Status)
+			file.WriteString(resp.Url)
+			file.WriteString(string(resp.Length))
 			log.Fatalln("Failed to write to file:", err)
 		}
-	}
+	*/
+
 }
 
 const workersCnt = 3 //number of Workers.
@@ -108,10 +156,12 @@ const workersCnt = 3 //number of Workers.
 
 func main() {
 	urlFlowSender := make(chan string, workersCnt) // urls channel
-	parsedFlowSender := make(chan string, 3)       // parsed channel
+	parsedFlowSender := make(chan *Response, 3)    // parsed channel
 	var readFileWg sync.WaitGroup
 	var workerWg sync.WaitGroup
 	var writerWg sync.WaitGroup
+	//var resps []*Response
+	//var httpWg sync.WaitGroup
 
 	//workerDone := make(chan struct{}, workersCnt) // helps synchronize the completion of worker goroutines
 	// empty struct in go is a zero size type. (probably it's idiomatic way to use that so no extra memory usage.)
@@ -125,13 +175,12 @@ func main() {
 	for i := 0; i < workersCnt; i++ { //while takeFile is reading, parseUrlQuery starts to read from
 		workerWg.Add(1) //takeFile with(urlFlowReceiver = urlFlowSender)
 		// and parse the URL's (atm it does not)
-		go parseUrlQuery(&workerWg, urlFlowSender, parsedFlowSender) //and sends to parsedFlowSender channel
-		// uses workerDone instead of close(parsedFlowSender), because this has to be closed after all workers
-		// have finished sending data.
+		go httpWorker(&workerWg, urlFlowSender, parsedFlowSender) //and sends to parsedFlowSender channel
 	}
-	writerWg.Add(1)
-	go writeInFile(&writerWg, parsedFlowSender) //reads from parsedFlowSender and writes into .csv data.
 
+	writerWg.Add(1)
+	go writeInFile(&writerWg, parsedFlowSender) //reads from urlFlowSender and writes into .csv data.
+	//httpWg.Wait()
 	readFileWg.Wait()
 	workerWg.Wait()
 	// waiting for parseUrlQuery goroutines
